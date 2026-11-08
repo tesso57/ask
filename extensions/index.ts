@@ -23,6 +23,7 @@ export default function (pi: ExtensionAPI) {
   let nextId = 1;
   const pending = new Map<number, Question>();
   const deliveries = new Map<string, Question>();
+  const answerDialogs = new Map<Question, Set<AbortController>>();
   const other = "その他（自由入力）";
   const entryType = "ask-user-state-v1";
   let dialogTail: Promise<void> = Promise.resolve();
@@ -155,18 +156,28 @@ export default function (pi: ExtensionAPI) {
     description: "Answer a pending question: /answer [number]",
     handler: async (args, ctx) => {
       const revision = branchRevision;
-      const signal = branchController.signal;
-      const q = args.trim() ? findQuestion(args, ctx) : pending.size ? await pickQuestion(ctx, signal) : findQuestion(args, ctx);
+      const branchSignal = branchController.signal;
+      const q = args.trim() ? findQuestion(args, ctx) : pending.size ? await pickQuestion(ctx, branchSignal) : findQuestion(args, ctx);
       if (!q) return;
+      const controller = new AbortController();
+      const dialogs = answerDialogs.get(q) ?? new Set<AbortController>();
+      dialogs.add(controller);
+      answerDialogs.set(q, dialogs);
+      const signal = AbortSignal.any([branchSignal, controller.signal]);
       const stillPending = () => !signal.aborted && branchRevision === revision && pending.get(q.id) === q;
-      const answer = await choose(q, ctx, signal, stillPending);
-      if (answer === undefined) {
-        if (stillPending()) ctx.ui.notify(`質問 #${q.id} は回答待ちのままです`, "info");
-        return;
+      try {
+        const answer = await choose(q, ctx, signal, stillPending);
+        if (answer === undefined) {
+          if (stillPending()) ctx.ui.notify(`質問 #${q.id} は回答待ちのままです`, "info");
+          return;
+        }
+        // A session switch or another answer may have removed the question while the dialog was open.
+        if (!stillPending()) return;
+        deliver(q, `質問 #${q.id}「${q.question}」への回答: ${answer}`);
+      } finally {
+        dialogs.delete(controller);
+        if (!dialogs.size) answerDialogs.delete(q);
       }
-      // A session switch or another answer may have removed the question while the dialog was open.
-      if (!stillPending()) return;
-      deliver(q, `質問 #${q.id}「${q.question}」への回答: ${answer}`);
     },
   });
 
@@ -199,6 +210,7 @@ export default function (pi: ExtensionAPI) {
     }
     if (!q || pending.get(q.id) !== q) return false;
     pending.delete(q.id);
+    for (const controller of answerDialogs.get(q) ?? []) controller.abort();
     for (const [message, question] of deliveries) if (question === q) deliveries.delete(message);
     return true;
   }

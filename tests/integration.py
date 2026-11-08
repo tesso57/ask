@@ -140,6 +140,20 @@ try:
  c.until(lambda x:x.get('type')=='response' and x.get('id')=='state-after-switch' and x.get('success'))
  assert not any(message.get('role') == 'user' and '質問 #1' in json.dumps(message.get('content'), ensure_ascii=False) for req in requests for message in req.get('messages', [])), requests
  c.close()
+ # A dismissal received while an answer dialog is open releases that dialog.
+ requests.clear(); session = tmp + '/dismiss-open.jsonl'
+ c=Client(); c.send({'id':'dismiss-open-init','type':'prompt','message':'hello'})
+ c.until(lambda x:x.get('type')=='agent_settled')
+ c.send({'id':'open-answer','type':'prompt','message':'/answer 1'})
+ old_dialog=c.until(lambda x:x.get('method')=='select')
+ start=len(c.events)
+ c.send({'id':'dismiss-open','type':'prompt','message':'/ask-dismiss 1'})
+ c.until(lambda x: all(any(e.get('id') == key and e.get('type') == 'response' and e.get('success') for e in c.events[start:]) for key in ('open-answer', 'dismiss-open')) and any(e.get('type') == 'agent_settled' for e in c.events[start:]))
+ c.send({'type':'extension_ui_response','id':old_dialog['id'],'value':'1. A'})
+ c.send({'id':'state-after-dismiss','type':'get_state'})
+ c.until(lambda x:x.get('type')=='response' and x.get('id')=='state-after-dismiss' and x.get('success'))
+ assert not any(message.get('role') == 'user' and 'への回答:' in json.dumps(message.get('content'), ensure_ascii=False) for req in requests for message in req.get('messages', [])), requests
+ c.close()
  print('Pi RPC: restoration, answers, dismissal, switching, parallel work, and invalid inputs')
 finally:
  release_followup.set()

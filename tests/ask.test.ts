@@ -471,3 +471,63 @@ test('a late dialog response after shutdown is not sent to the agent', async () 
   await answering;
   assert.equal(s.sent.length, 0);
 });
+
+test('an acknowledged dismissal closes any open answer dialog for that question', async () => {
+  const s = setup();
+  await s.ask({ ...question, mode: 'async' });
+  let opened!: () => void;
+  const ready = new Promise<void>(resolve => { opened = resolve; });
+  s.ctx.ui.select = (_title, _choices, options) => new Promise<string | undefined>(resolve => {
+    opened();
+    options?.signal?.addEventListener('abort', () => resolve(undefined), { once: true });
+  });
+  const answering = s.command.handler('1', s.ctx);
+  await ready;
+  await s.dismiss.handler('1', s.ctx);
+  s.handlers.get('message_start')!({ message: { role: 'user', content: [{ type: 'text', text: s.sent[0][0] }] } }, s.ctx);
+  const timeout = new Promise(resolve => setTimeout(() => resolve('dialog remained open'), 250));
+  assert.notEqual(await Promise.race([answering, timeout]), 'dialog remained open');
+  assert.equal(s.sent.length, 1);
+});
+
+test('dismissing one question leaves another question dialog open', async () => {
+  const s = setup();
+  await s.ask({ question: 'First?', options: ['A', 'B'], mode: 'async' });
+  await s.ask({ question: 'Second?', options: ['A', 'B'], mode: 'async' });
+  const opened: Dialog[] = [];
+  let aborted = false;
+  s.ctx.ui.select = (title, _choices, options) => new Promise<string | undefined>(resolve => {
+    opened.push({ title, resolve });
+    options?.signal?.addEventListener('abort', () => { aborted = true; resolve(undefined); }, { once: true });
+  });
+  const answering = s.command.handler('1', s.ctx);
+  await new Promise(resolve => setImmediate(resolve));
+  await s.dismiss.handler('2', s.ctx);
+  s.handlers.get('message_start')!({ message: { role: 'user', content: [{ type: 'text', text: s.sent[0][0] }] } }, s.ctx);
+  assert.equal(aborted, false);
+  opened[0].resolve('1. A');
+  await answering;
+  assert.match(s.sent[1][0], /#1/);
+});
+
+test('acknowledging a dismissal cancels active and queued dialogs for that question', async () => {
+  const s = setup();
+  await s.ask({ ...question, mode: 'async' });
+  let opened!: () => void;
+  const ready = new Promise<void>(resolve => { opened = resolve; });
+  let count = 0;
+  s.ctx.ui.select = (_title, _choices, options) => new Promise<string | undefined>(resolve => {
+    count++;
+    opened();
+    options?.signal?.addEventListener('abort', () => resolve(undefined), { once: true });
+  });
+  const first = s.command.handler('1', s.ctx);
+  await ready;
+  const second = s.command.handler('1', s.ctx);
+  await s.dismiss.handler('1', s.ctx);
+  s.handlers.get('message_start')!({ message: { role: 'user', content: [{ type: 'text', text: s.sent[0][0] }] } }, s.ctx);
+  const timeout = new Promise(resolve => setTimeout(() => resolve('dialogs remained open'), 250));
+  assert.notEqual(await Promise.race([Promise.all([first, second]), timeout]), 'dialogs remained open');
+  assert.equal(count, 1);
+  assert.equal(s.sent.length, 1);
+});
