@@ -215,3 +215,23 @@ test('many long pending questions keep the widget compact while retaining every 
   await s.command.handler('8', s.ctx);
   assert.equal(s.sent.length, 1);
 });
+
+test('a prefixed answer is acknowledged after input transformation', async () => {
+  const s = setup();
+  await s.ask({ ...question, mode: 'async' });
+  s.selections.push('1. A');
+  await s.command.handler('1', s.ctx);
+  s.handlers.get('message_start')({ message: { role: 'user', content: [{ type: 'text', text: `Context: ${s.sent[0][0]}` }] } }, s.ctx);
+  assert.equal(s.widget, undefined);
+});
+
+
+test('a transformed answer remains acknowledged after restoring the session', async () => {
+  const s = setup();
+  await s.ask({ ...question, mode: 'async' });
+  s.selections.push('2. B');
+  await s.command.handler('1', s.ctx);
+  s.entries.push({ type: 'message', message: { role: 'user', content: [{ type: 'text', text: `Context: ${s.sent[0][0]}` }] } });
+  s.handlers.get('session_start')({}, s.ctx);
+  assert.equal(s.widget, undefined);
+});

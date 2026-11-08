@@ -137,7 +137,18 @@ export default function (pi: ExtensionAPI) {
 
   function accept(text: string | undefined) {
     if (text === undefined) return false;
-    const q = deliveries.get(text);
+    // Other extensions may wrap injected user messages with context. Match the full
+    // answer text inside such wrappers, preferring the longest match if they overlap.
+    let q = deliveries.get(text);
+    if (!q) {
+      let longest = 0;
+      for (const [message, question] of deliveries) {
+        if (message.length > longest && text.includes(message)) {
+          longest = message.length;
+          q = question;
+        }
+      }
+    }
     if (!q || pending.get(q.id) !== q) return false;
     pending.delete(q.id);
     for (const [message, question] of deliveries) if (question === q) deliveries.delete(message);
