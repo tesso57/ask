@@ -189,7 +189,12 @@ test('many long pending questions keep the widget compact while retaining every 
   assert.ok(s.widget!.length <= 6);
   assert.ok(s.widget!.every(line => [...line].length <= 120));
   let listed = false;
-  s.ctx.ui.select = async (_title, choices) => { listed = choices.some(choice => choice.startsWith('#8 ')); return undefined; };
+  let page = 0;
+  s.ctx.ui.select = async (_title, choices) => {
+    if (page++ === 0) return choices.find(choice => choice.includes('次へ'));
+    listed = choices.some(choice => choice.startsWith('#8 '));
+    return undefined;
+  };
   await s.command.handler('', s.ctx);
   assert.equal(listed, true);
   s.ctx.ui.select = async () => '1. A';
@@ -530,4 +535,44 @@ test('acknowledging a dismissal cancels active and queued dialogs for that quest
   assert.notEqual(await Promise.race([Promise.all([first, second]), timeout]), 'dialogs remained open');
   assert.equal(count, 1);
   assert.equal(s.sent.length, 1);
+});
+
+test('the pending question picker pages through long lists', async () => {
+  const s = setup();
+  for (let i = 1; i <= 13; i++) await s.ask({ question: `Question ${i}?`, options: ['A', 'B'], mode: 'async' });
+  const pages: string[][] = [];
+  s.ctx.ui.select = async (_title, choices) => {
+    pages.push(choices);
+    if (pages.length === 1) return choices.find(choice => choice.includes('次へ'));
+    if (pages.length === 2) return choices.find(choice => choice.includes('次へ'));
+    if (pages.length === 3) return choices.find(choice => choice.includes('前へ'));
+    if (pages.length === 4) return choices.find(choice => choice.startsWith('#8 '));
+    return '1. A';
+  };
+  await s.command.handler('', s.ctx);
+  assert.equal(pages.length, 5);
+  assert.ok(pages.slice(0, 4).every(page => page.length <= 7));
+  assert.ok(pages[0].some(choice => choice.startsWith('#1 ')));
+  assert.ok(pages[2].some(choice => choice.startsWith('#13 ')));
+  assert.match(s.sent[0][0], /#8「Question 8\?」への回答: A/);
+});
+
+test('the picker adjusts when a question is dismissed between pages', async () => {
+  const s = setup();
+  for (let i = 1; i <= 6; i++) await s.ask({ question: `Question ${i}?`, options: ['A', 'B'], mode: 'async' });
+  await s.dismiss.handler('6', s.ctx);
+  let dialog = 0;
+  s.ctx.ui.select = async (_title, choices) => {
+    dialog++;
+    if (dialog === 1) return choices.find(choice => choice.includes('次へ'));
+    if (dialog === 2) {
+      s.handlers.get('message_start')!({ message: { role: 'user', content: [{ type: 'text', text: s.sent[0][0] }] } }, s.ctx);
+      return choices.find(choice => choice.includes('前へ'));
+    }
+    if (dialog === 3) return choices.find(choice => choice.startsWith('#5 '));
+    return '1. A';
+  };
+  await s.command.handler('', s.ctx);
+  assert.equal(dialog, 4);
+  assert.match(s.sent[1][0], /#5「Question 5\?」への回答: A/);
 });

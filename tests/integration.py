@@ -4,6 +4,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 requests = []
 hold_followup = False
 parallel_case = False
+many_case = False
 invalid_case = False
 unsafe_case = False
 followup_started = threading.Event()
@@ -20,6 +21,8 @@ class Handler(BaseHTTPRequestHandler):
     if len(requests) == 1:
       args = json.dumps({'question': 'Pick one\x1b]52;c;SGVsbG8=\x07' if unsafe_case else 'Pick one', 'options': ['A', ' A '] if invalid_case else ['A', 'B'], 'mode': 'async'})
       tools = [{'index': 0, 'id': 'call_1', 'type': 'function', 'function': {'name': 'ask_user', 'arguments': args}}]
+      if many_case:
+        tools = [{'index': i, 'id': f'call_{i}', 'type': 'function', 'function': {'name': 'ask_user', 'arguments': json.dumps({'question': f'Question {i + 1}?', 'options': ['A', 'B'], 'mode': 'async'})}} for i in range(13)]
       if parallel_case:
         tools = [{'index': 0, 'id': 'wait_1', 'type': 'function', 'function': {'name': 'bash', 'arguments': json.dumps({'command': 'sleep 2'})}}, {**tools[0], 'index': 1}]
       events = [{'role': 'assistant', 'tool_calls': tools}, {}]
@@ -154,7 +157,23 @@ try:
  c.until(lambda x:x.get('type')=='response' and x.get('id')=='state-after-dismiss' and x.get('success'))
  assert not any(message.get('role') == 'user' and 'への回答:' in json.dumps(message.get('content'), ensure_ascii=False) for req in requests for message in req.get('messages', [])), requests
  c.close()
- print('Pi RPC: restoration, answers, dismissal, switching, parallel work, and invalid inputs')
+ # The question picker remains navigable when many questions are pending.
+ requests.clear(); many_case = True; session = tmp + '/many.jsonl'
+ c=Client(); c.send({'id':'many-init','type':'prompt','message':'hello'})
+ c.until(lambda x:x.get('type')=='agent_settled')
+ c.send({'id':'many-answer','type':'prompt','message':'/answer'})
+ for page in range(3):
+  req=c.until(lambda x:x.get('method')=='select')
+  assert len(req['options']) <= 7, req
+  selected=next(option for option in req['options'] if ('次へ' in option if page < 2 else option.startswith('#13 ')))
+  c.send({'type':'extension_ui_response','id':req['id'],'value':selected})
+ req=c.until(lambda x:x.get('method')=='select')
+ assert req['title'] == 'Question 13?', req
+ c.send({'type':'extension_ui_response','id':req['id'],'value':'1. A'})
+ c.until(lambda x:x.get('type')=='agent_settled')
+ assert any(message.get('role') == 'user' and '#13' in json.dumps(message.get('content'), ensure_ascii=False) for req in requests for message in req.get('messages', [])), requests
+ c.close()
+ print('Pi RPC: restoration, answers, pagination, dismissal, switching, parallel work, and invalid inputs')
 finally:
  release_followup.set()
  for client in clients: client.close()

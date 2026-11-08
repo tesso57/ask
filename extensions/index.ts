@@ -81,13 +81,27 @@ export default function (pi: ExtensionAPI) {
   async function pickQuestion(ctx: ExtensionContext, signal: AbortSignal): Promise<Question | undefined> {
     const revision = branchRevision;
     return withDialog(async () => {
-      const questions = [...pending.values()];
-      if (!questions.length) return undefined;
-      const choices = questions.map(q => `#${q.id} ${summarize(q.question, 100)}`);
-      const selected = await ctx.ui.select("回答する質問を選択", choices, { signal });
-      if (selected === undefined) return undefined;
-      const q = questions[choices.indexOf(selected)];
-      return q && !signal.aborted && branchRevision === revision && pending.get(q.id) === q ? q : undefined;
+      const pageSize = 5;
+      let page = 0;
+      while (!signal.aborted && branchRevision === revision) {
+        const questions = [...pending.values()];
+        if (!questions.length) return undefined;
+        const totalPages = Math.ceil(questions.length / pageSize);
+        page = Math.min(page, totalPages - 1);
+        const pageQuestions = questions.slice(page * pageSize, (page + 1) * pageSize);
+        const choices = pageQuestions.map(q => `#${q.id} ${summarize(q.question, 60)}`);
+        const previous = "← 前へ";
+        const next = "次へ →";
+        const options = [...choices, ...(page > 0 ? [previous] : []), ...(page + 1 < totalPages ? [next] : [])];
+        const title = totalPages > 1 ? `回答する質問を選択 (${page + 1}/${totalPages})` : "回答する質問を選択";
+        const selected = await ctx.ui.select(title, options, { signal });
+        if (selected === undefined || signal.aborted || branchRevision !== revision) return undefined;
+        if (selected === previous && page > 0) { page--; continue; }
+        if (selected === next && page + 1 < totalPages) { page++; continue; }
+        const q = pageQuestions[choices.indexOf(selected)];
+        return q && pending.get(q.id) === q ? q : undefined;
+      }
+      return undefined;
     }, signal, () => branchRevision === revision);
   }
 
