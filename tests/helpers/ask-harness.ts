@@ -1,3 +1,4 @@
+import type { SessionManager } from "@earendil-works/pi-coding-agent";
 import register from "../../extensions/index.ts";
 
 type Params = { question: string; options: string[]; mode: "sync" | "async" };
@@ -21,7 +22,7 @@ type Context = {
 };
 export type Dialog = { title: string; resolve(value: string | undefined): void };
 
-export function createAskHarness() {
+export function createAskHarness(session?: SessionManager) {
   let tool!: Tool;
   const commands = new Map<string, { handler(args: string, ctx: Context): Promise<void> }>();
   const handlers = new Map<string, Handler>();
@@ -37,10 +38,13 @@ export function createAskHarness() {
     registerCommand(name: string, value: { handler(args: string, ctx: Context): Promise<void> }) { commands.set(name, value); },
     on(name: string, handler: Handler) { handlers.set(name, handler); },
     sendUserMessage(...args: [string, { deliverAs: string }]) { sent.push(args); },
-    appendEntry(customType: string, data: unknown) { entries.push({ type: "custom", customType, data }); },
+    appendEntry(customType: string, data: unknown) {
+      if (session) session.appendCustomEntry(customType, data);
+      else entries.push({ type: "custom", customType, data });
+    },
   };
   register(mock as unknown as import("@earendil-works/pi-coding-agent").ExtensionAPI);
-  const ctx: Context = { hasUI: true, sessionManager: { getBranch: () => branch }, ui: {
+  const ctx: Context = { hasUI: true, sessionManager: { getBranch: () => session ? session.getBranch() as unknown as Entry[] : branch }, ui: {
     async select() {
       if (!selections.length) throw new Error("No mock response for select");
       return selections.shift();
