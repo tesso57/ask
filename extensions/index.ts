@@ -193,7 +193,9 @@ export default function (pi: ExtensionAPI) {
   function messageText(message: MessageStartEvent["message"]): string | undefined {
     if (message.role !== "user") return undefined;
     const content = message.content;
-    return typeof content === "string" ? content : content.filter(part => part.type === "text").map(part => part.text).join("\n");
+    if (typeof content === "string") return content;
+    if (!Array.isArray(content)) return undefined;
+    return content.flatMap(part => part?.type === "text" && typeof part.text === "string" ? [part.text] : []).join("\n");
   }
 
   function accept(text: string | undefined) {

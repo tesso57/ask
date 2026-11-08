@@ -57,3 +57,14 @@ test("legacy control characters are sanitized without reopening answered history
   await s.command.handler("1", s.ctx);
   assert.ok(!s.sent[0][0].includes("\u001b"));
 });
+
+test("pending questions restore even when older user messages have missing content", async () => {
+  for (const content of [null, undefined, [null, { type: "text", text: null }, { type: "text", text: "Older note" }]]) {
+    const session = SessionManager.inMemory(process.cwd());
+    session.appendMessage({ role: "user", content, timestamp: Date.now() } as unknown as Parameters<SessionManager["appendMessage"]>[0]);
+    const s = createAskHarness(session);
+    await s.ask({ question: "Choose?", options: ["A", "B"], mode: "async" });
+    s.handlers.get("session_start")!({}, s.ctx);
+    assert.match(s.widget![0], /#1 Choose/);
+  }
+});
