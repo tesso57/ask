@@ -66,7 +66,10 @@ try:
  c.close()
  c=Client()
  c.until(lambda x:x.get('method')=='setWidget' and '#1 Pick one' in str(x.get('widgetLines')))
- c.send({'id':'answer','type':'prompt','message':'/answer 1'})
+ c.send({'id':'answer','type':'prompt','message':'/answer'})
+ req=c.until(lambda x:x.get('method')=='select')
+ assert req['title'] == '回答する質問を選択' and any('#1 Pick one' in option for option in req['options']), req
+ c.send({'type':'extension_ui_response','id':req['id'],'value':req['options'][0]})
  req=c.until(lambda x:x.get('method')=='select')
  c.send({'type':'extension_ui_response','id':req['id'],'value':'2. B'})
  c.until(lambda x:x.get('type')=='message_start' and x.get('message',{}).get('role')=='user' and 'B' in str(x.get('message',{}).get('content')))
@@ -80,7 +83,10 @@ try:
  requests.clear(); hold_followup = True; session = tmp + '/streaming.jsonl'
  c=Client(); c.send({'id':'stream','type':'prompt','message':'hello'})
  assert followup_started.wait(10), 'model follow-up did not start'
- c.send({'id':'answer-stream','type':'prompt','message':'/answer 1','streamingBehavior':'steer'})
+ c.send({'id':'answer-stream','type':'prompt','message':'/answer','streamingBehavior':'steer'})
+ req=c.until(lambda x:x.get('method')=='select')
+ assert req['title'] == '回答する質問を選択', req
+ c.send({'type':'extension_ui_response','id':req['id'],'value':req['options'][0]})
  req=c.until(lambda x:x.get('method')=='select')
  c.send({'type':'extension_ui_response','id':req['id'],'value':'1. A'})
  c.until(lambda x:x.get('id')=='answer-stream' and x.get('type')=='response' and x.get('success'))

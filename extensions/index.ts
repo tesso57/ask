@@ -20,10 +20,11 @@ export default function (pi: ExtensionAPI) {
   const other = "その他（自由入力）";
   const entryType = "ask-user-state-v1";
   let dialogTail: Promise<void> = Promise.resolve();
+  let branchRevision = 0;
 
-  function summarize(text: string): string {
+  function summarize(text: string, limit = 24): string {
     const chars = [...text.replace(/\s+/g, " ").trim()];
-    return chars.length > 24 ? `${chars.slice(0, 24).join("")}…` : chars.join("");
+    return chars.length > limit ? `${chars.slice(0, limit).join("")}…` : chars.join("");
   }
 
   function refresh(ctx: ExtensionContext) {
@@ -31,11 +32,11 @@ export default function (pi: ExtensionAPI) {
     const visible = questions.slice(0, 3).map(q => `#${q.id} ${summarize(q.question)}`);
     const remaining = questions.length - visible.length;
     ctx.ui.setWidget("ask-pending", questions.length
-      ? ["回答待ち: " + visible.join(" / ") + (remaining ? ` / ほか ${remaining} 件` : ""), "回答: /answer <番号>（番号一覧: /answer）", "取り下げ: /ask-dismiss <番号>"]
+      ? ["回答待ち: " + visible.join(" / ") + (remaining ? ` / ほか ${remaining} 件` : ""), "回答: /answer [番号]（省略時は一覧から選択）", "取り下げ: /ask-dismiss <番号>"]
       : undefined);
   }
 
-  async function choose(q: Question, ctx: ExtensionContext, signal?: AbortSignal, canOpen: () => boolean = () => true): Promise<string | undefined> {
+  async function withDialog<T>(show: () => Promise<T | undefined>, signal?: AbortSignal, canOpen: () => boolean = () => true): Promise<T | undefined> {
     const previous = dialogTail;
     let release!: () => void;
     dialogTail = new Promise<void>(resolve => { release = resolve; });
@@ -59,10 +60,27 @@ export default function (pi: ExtensionAPI) {
     }
     try {
       if (signal?.aborted || !canOpen()) return undefined;
-      return await showQuestion(q, ctx, signal);
+      return await show();
     } finally {
       release();
     }
+  }
+
+  function choose(q: Question, ctx: ExtensionContext, signal?: AbortSignal, canOpen: () => boolean = () => true): Promise<string | undefined> {
+    return withDialog(() => showQuestion(q, ctx, signal), signal, canOpen);
+  }
+
+  async function pickQuestion(ctx: ExtensionContext): Promise<Question | undefined> {
+    const revision = branchRevision;
+    return withDialog(async () => {
+      const questions = [...pending.values()];
+      if (!questions.length) return undefined;
+      const choices = questions.map(q => `#${q.id} ${summarize(q.question, 100)}`);
+      const selected = await ctx.ui.select("回答する質問を選択", choices);
+      if (selected === undefined) return undefined;
+      const q = questions[choices.indexOf(selected)];
+      return q && branchRevision === revision && pending.get(q.id) === q ? q : undefined;
+    }, undefined, () => branchRevision === revision);
   }
 
   async function showQuestion(q: Question, ctx: ExtensionContext, signal?: AbortSignal): Promise<string | undefined> {
@@ -123,17 +141,19 @@ export default function (pi: ExtensionAPI) {
   }
 
   pi.registerCommand("answer", {
-    description: "Answer a pending ask_user question: /answer <number>",
+    description: "Answer a pending question: /answer [number]",
     handler: async (args, ctx) => {
-      const q = findQuestion(args, ctx);
+      const revision = branchRevision;
+      const q = args.trim() ? findQuestion(args, ctx) : pending.size ? await pickQuestion(ctx) : findQuestion(args, ctx);
       if (!q) return;
-      const answer = await choose(q, ctx, undefined, () => pending.get(q.id) === q);
+      const stillPending = () => branchRevision === revision && pending.get(q.id) === q;
+      const answer = await choose(q, ctx, undefined, stillPending);
       if (answer === undefined) {
-        if (pending.get(q.id) === q) ctx.ui.notify(`質問 #${q.id} は回答待ちのままです`, "info");
+        if (stillPending()) ctx.ui.notify(`質問 #${q.id} は回答待ちのままです`, "info");
         return;
       }
       // A session switch or another answer may have removed the question while the dialog was open.
-      if (pending.get(q.id) !== q) return;
+      if (!stillPending()) return;
       deliver(q, `質問 #${q.id}「${q.question}」への回答: ${answer}`);
     },
   });
@@ -176,6 +196,7 @@ export default function (pi: ExtensionAPI) {
   });
 
   function restore(ctx: ExtensionContext) {
+    branchRevision++;
     pending.clear();
     deliveries.clear();
     nextId = 1;

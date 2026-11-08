@@ -188,9 +188,11 @@ test('many long pending questions keep the widget compact while retaining every 
   }
   assert.ok(s.widget!.length <= 6);
   assert.ok(s.widget!.every(line => [...line].length <= 120));
+  let listed = false;
+  s.ctx.ui.select = async (_title, choices) => { listed = choices.some(choice => choice.startsWith('#8 ')); return undefined; };
   await s.command.handler('', s.ctx);
-  assert.match(s.notifications.at(-1)![0], /8/);
-  s.selections.push('1. A');
+  assert.equal(listed, true);
+  s.ctx.ui.select = async () => '1. A';
   await s.command.handler('8', s.ctx);
   assert.equal(s.sent.length, 1);
 });
@@ -281,4 +283,81 @@ test('invalid questions do not present empty or indistinguishable choices', asyn
     assert.equal(s.widget, undefined);
     assert.equal(s.entries.length, 0);
   }
+});
+
+test('answer without a number lets the user choose a pending question by title', async () => {
+  const s = setup();
+  for (const question of ['One?', 'Two?', 'Three?', 'Four?']) {
+    await s.ask({ question, options: ['A', 'B'], mode: 'async' });
+  }
+  const dialogs: { title: string; choices: string[] }[] = [];
+  s.ctx.ui.select = async (title, choices) => {
+    dialogs.push({ title, choices });
+    return dialogs.length === 1 ? choices.find(choice => choice.includes('#4') && choice.includes('Four?')) : '2. B';
+  };
+  await s.command.handler('', s.ctx);
+  assert.equal(dialogs.length, 2);
+  assert.equal(dialogs[1].title, 'Four?');
+  assert.match(s.sent[0][0], /#4「Four\?」への回答: B/);
+});
+
+test('cancelling the pending question picker sends no answer', async () => {
+  const s = setup();
+  await s.ask({ ...question, mode: 'async' });
+  let opened = false;
+  s.ctx.ui.select = async () => { opened = true; return undefined; };
+  await s.command.handler('', s.ctx);
+  assert.equal(opened, true);
+  assert.equal(s.sent.length, 0);
+  assert.match(s.widget![0], /#1/);
+});
+
+test('a queued question picker does not open on a different session branch', async () => {
+  const s = setup();
+  const opened: Dialog[] = [];
+  s.ctx.ui.select = title => new Promise<string | undefined>(resolve => opened.push({ title, resolve }));
+  const first = s.ask({ ...question, mode: 'sync' });
+  await new Promise(resolve => setImmediate(resolve));
+  await s.ask({ question: 'Old branch?', options: ['A', 'B'], mode: 'async' });
+  const picker = s.command.handler('', s.ctx);
+  s.setBranch([]);
+  s.handlers.get('session_tree')!({}, s.ctx);
+  await s.ask({ question: 'New branch?', options: ['A', 'B'], mode: 'async' });
+  opened[0].resolve('1. A');
+  await first;
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(opened.map(dialog => dialog.title), ['Choose?']);
+  await picker;
+});
+
+test('a question picker open during branch navigation does not submit to the new branch', async () => {
+  const s = setup();
+  await s.ask({ ...question, mode: 'async' });
+  const saved = [...s.entries];
+  const opened: Dialog[] = [];
+  s.ctx.ui.select = title => new Promise<string | undefined>(resolve => opened.push({ title, resolve }));
+  const picker = s.command.handler('', s.ctx);
+  await new Promise(resolve => setImmediate(resolve));
+  s.setBranch(saved);
+  s.handlers.get('session_tree')!({}, s.ctx);
+  opened[0].resolve('#1 Choose?');
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(opened.length, 1);
+  await picker;
+  assert.equal(s.sent.length, 0);
+});
+
+test('an answer dialog open during branch navigation does not submit to the new branch', async () => {
+  const s = setup();
+  await s.ask({ ...question, mode: 'async' });
+  const saved = [...s.entries];
+  const opened: Dialog[] = [];
+  s.ctx.ui.select = title => new Promise<string | undefined>(resolve => opened.push({ title, resolve }));
+  const answering = s.command.handler('1', s.ctx);
+  await new Promise(resolve => setImmediate(resolve));
+  s.setBranch(saved);
+  s.handlers.get('session_tree')!({}, s.ctx);
+  opened[0].resolve('1. A');
+  await answering;
+  assert.equal(s.sent.length, 0);
 });
