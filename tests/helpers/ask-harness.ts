@@ -1,7 +1,7 @@
 import register from "../../extensions/index.ts";
 
 type Params = { question: string; options: string[]; mode: "sync" | "async" };
-type Result = { details: { status: string; answer?: string; id?: number } };
+type Result = { isError?: boolean; details: { status: string; answer?: string; id?: number } };
 type Tool = {
   execute(id: string, params: Params, signal: AbortSignal | undefined, update: undefined, ctx: Context): Promise<Result>;
   executionMode?: string;

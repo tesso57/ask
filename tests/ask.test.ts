@@ -266,3 +266,19 @@ test('a failed dismissal remains pending and can be retried', async () => {
   await s.dismiss.handler('1', s.ctx);
   assert.equal(s.sent.length, 2);
 });
+
+test('invalid questions do not present empty or indistinguishable choices', async () => {
+  const cases = [
+    { question: '   ', options: ['A', 'B'], mode: 'sync' as const },
+    { question: 'Choose?', options: ['A', '  '], mode: 'sync' as const },
+    { question: 'Choose?', options: ['A', ' A '], mode: 'async' as const },
+  ];
+  for (const params of cases) {
+    const s = setup();
+    const result = await s.ask(params);
+    assert.equal(result.details.status, 'invalid');
+    assert.equal(result.isError, true);
+    assert.equal(s.widget, undefined);
+    assert.equal(s.entries.length, 0);
+  }
+});

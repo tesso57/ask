@@ -66,7 +66,7 @@ export default function (pi: ExtensionAPI) {
   }
 
   async function showQuestion(q: Question, ctx: ExtensionContext, signal?: AbortSignal): Promise<string | undefined> {
-    // Number the items so duplicate labels and a label equal to 'other' stay distinct.
+    // Number choices so an option named like the free-text entry stays distinct.
     const choices = q.options.map((option, i) => `${i + 1}. ${option}`);
     const custom = `${choices.length + 1}. ${other}`;
     const selected = await ctx.ui.select(q.question, [...choices, custom], { signal });
@@ -91,6 +91,10 @@ export default function (pi: ExtensionAPI) {
     }),
     async execute(_id, params, signal, _onUpdate, ctx) {
       if (!ctx.hasUI) return { content: [{ type: "text", text: "Cannot ask: this session has no interactive UI. No answer was given." }], details: { status: "unavailable" } };
+      const options = params.options.map(option => option.trim());
+      if (!params.question.trim() || options.some(option => !option) || new Set(options).size !== options.length) {
+        return { content: [{ type: "text", text: "Provide a non-empty question and distinct, non-empty options." }], details: { status: "invalid" }, isError: true };
+      }
       const q = { id: nextId++, question: params.question, options: params.options };
       if (params.mode === "sync") {
         const answer = await choose(q, ctx, signal);

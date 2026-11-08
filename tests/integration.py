@@ -4,6 +4,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 requests = []
 hold_followup = False
 parallel_case = False
+invalid_case = False
 followup_started = threading.Event()
 release_followup = threading.Event()
 class Handler(BaseHTTPRequestHandler):
@@ -16,7 +17,7 @@ class Handler(BaseHTTPRequestHandler):
       if not release_followup.wait(10): raise TimeoutError('follow-up was not released')
     base={'id':'test','object':'chat.completion.chunk','created':1,'model':'test-model'}
     if len(requests) == 1:
-      args = json.dumps({'question': 'Pick one', 'options': ['A', 'B'], 'mode': 'async'})
+      args = json.dumps({'question': 'Pick one', 'options': ['A', ' A '] if invalid_case else ['A', 'B'], 'mode': 'async'})
       tools = [{'index': 0, 'id': 'call_1', 'type': 'function', 'function': {'name': 'ask_user', 'arguments': args}}]
       if parallel_case:
         tools = [{'index': 0, 'id': 'wait_1', 'type': 'function', 'function': {'name': 'bash', 'arguments': json.dumps({'command': 'sleep 2'})}}, {**tools[0], 'index': 1}]
@@ -105,7 +106,14 @@ try:
  notice=c.until(lambda x:x.get('method')=='notify')
  assert 'ありません' in notice.get('message',''), notice
  c.close()
- print('Pi RPC: restoration, answers, dismissal, and parallel independent work')
+ # Invalid options return a tool error without creating a pending question.
+ requests.clear(); invalid_case = True; session = tmp + '/invalid.jsonl'
+ c=Client(); c.send({'id':'invalid','type':'prompt','message':'hello'})
+ c.until(lambda x:x.get('type')=='agent_settled')
+ assert any(e.get('type') == 'tool_execution_end' and e.get('toolName') == 'ask_user' and e.get('isError') for e in c.events), c.events
+ assert not any(e.get('method') == 'setWidget' and e.get('widgetLines') for e in c.events), c.events
+ c.close()
+ print('Pi RPC: restoration, answers, dismissal, parallel work, and invalid options')
 finally:
  release_followup.set()
  for client in clients: client.close()
