@@ -1,0 +1,44 @@
+{
+  "name": "pi-ask-user-async",
+  "version": "0.1.0",
+  "description": "Ask users questions synchronously or asynchronously in Pi",
+  "type": "module",
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "question",
+    "async"
+  ],
+  "files": [
+    "extensions",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=22.18.0"
+  },
+  "scripts": {
+    "test": "node --test tests/*.test.mjs"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
+  },
+  "devDependencies": {
+    "typebox": "^1.3.27"
+  },
+  "pi": {
+    "extensions": [
+      "./extensions/ask.ts"
+    ]
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/tesso57/ask.git"
+  },
+  "homepage": "https://github.com/tesso57/ask#readme",
+  "bugs": {
+    "url": "https://github.com/tesso57/ask/issues"
+  }
+}
