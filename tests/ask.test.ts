@@ -402,3 +402,72 @@ test('free-text answers with terminal controls remain unanswered', async () => {
   assert.match(s.widget![0], /#1/);
   assert.ok(s.notifications.some(([message]) => message.includes('制御文字')));
 });
+
+test('branch navigation dismisses an open pending-question dialog', async () => {
+  for (const args of ['', '1']) {
+    const s = setup();
+    await s.ask({ ...question, mode: 'async' });
+    let opened!: () => void;
+    const ready = new Promise<void>(resolve => { opened = resolve; });
+    s.ctx.ui.select = (_title, _choices, options) => new Promise<string | undefined>(resolve => {
+      opened();
+      options?.signal?.addEventListener('abort', () => resolve(undefined), { once: true });
+    });
+    const answering = s.command.handler(args, s.ctx);
+    await ready;
+    s.setBranch([]);
+    s.handlers.get('session_tree')!({}, s.ctx);
+    const timeout = new Promise(resolve => setTimeout(() => resolve('dialog remained open'), 250));
+    assert.notEqual(await Promise.race([answering, timeout]), 'dialog remained open');
+    assert.equal(s.sent.length, 0);
+  }
+});
+
+test('branch navigation dismisses an open free-text answer', async () => {
+  const s = setup();
+  await s.ask({ ...question, mode: 'async' });
+  s.selections.push('3. その他（自由入力）');
+  let opened!: () => void;
+  const ready = new Promise<void>(resolve => { opened = resolve; });
+  s.ctx.ui.input = (_title, _placeholder, options) => new Promise<string | undefined>(resolve => {
+    opened();
+    options?.signal?.addEventListener('abort', () => resolve(undefined), { once: true });
+  });
+  const answering = s.command.handler('1', s.ctx);
+  await ready;
+  s.setBranch([]);
+  s.handlers.get('session_tree')!({}, s.ctx);
+  const timeout = new Promise(resolve => setTimeout(() => resolve('input remained open'), 250));
+  assert.notEqual(await Promise.race([answering, timeout]), 'input remained open');
+  assert.equal(s.sent.length, 0);
+});
+
+test('session shutdown dismisses an open answer dialog', async () => {
+  const s = setup();
+  await s.ask({ ...question, mode: 'async' });
+  let opened!: () => void;
+  const ready = new Promise<void>(resolve => { opened = resolve; });
+  s.ctx.ui.select = (_title, _choices, options) => new Promise<string | undefined>(resolve => {
+    opened();
+    options?.signal?.addEventListener('abort', () => resolve(undefined), { once: true });
+  });
+  const answering = s.command.handler('1', s.ctx);
+  await ready;
+  s.handlers.get('session_shutdown')!({}, s.ctx);
+  const timeout = new Promise(resolve => setTimeout(() => resolve('dialog remained open'), 250));
+  assert.notEqual(await Promise.race([answering, timeout]), 'dialog remained open');
+  assert.equal(s.sent.length, 0);
+});
+
+test('a late dialog response after shutdown is not sent to the agent', async () => {
+  const s = setup();
+  await s.ask({ ...question, mode: 'async' });
+  const opened: Dialog[] = [];
+  s.ctx.ui.select = title => new Promise<string | undefined>(resolve => opened.push({ title, resolve }));
+  const answering = s.command.handler('1', s.ctx);
+  await new Promise(resolve => setImmediate(resolve));
+  s.handlers.get('session_shutdown')!({}, s.ctx);
+  opened[0].resolve('1. A');
+  await answering;
+  assert.equal(s.sent.length, 0);
+});

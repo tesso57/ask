@@ -27,6 +27,7 @@ export default function (pi: ExtensionAPI) {
   const entryType = "ask-user-state-v1";
   let dialogTail: Promise<void> = Promise.resolve();
   let branchRevision = 0;
+  let branchController = new AbortController();
 
   function summarize(text: string, limit = 24): string {
     const chars = [...text.replace(/\s+/g, " ").trim()];
@@ -76,17 +77,17 @@ export default function (pi: ExtensionAPI) {
     return withDialog(() => showQuestion(q, ctx, signal), signal, canOpen);
   }
 
-  async function pickQuestion(ctx: ExtensionContext): Promise<Question | undefined> {
+  async function pickQuestion(ctx: ExtensionContext, signal: AbortSignal): Promise<Question | undefined> {
     const revision = branchRevision;
     return withDialog(async () => {
       const questions = [...pending.values()];
       if (!questions.length) return undefined;
       const choices = questions.map(q => `#${q.id} ${summarize(q.question, 100)}`);
-      const selected = await ctx.ui.select("回答する質問を選択", choices);
+      const selected = await ctx.ui.select("回答する質問を選択", choices, { signal });
       if (selected === undefined) return undefined;
       const q = questions[choices.indexOf(selected)];
-      return q && branchRevision === revision && pending.get(q.id) === q ? q : undefined;
-    }, undefined, () => branchRevision === revision);
+      return q && !signal.aborted && branchRevision === revision && pending.get(q.id) === q ? q : undefined;
+    }, signal, () => branchRevision === revision);
   }
 
   async function showQuestion(q: Question, ctx: ExtensionContext, signal?: AbortSignal): Promise<string | undefined> {
@@ -154,10 +155,11 @@ export default function (pi: ExtensionAPI) {
     description: "Answer a pending question: /answer [number]",
     handler: async (args, ctx) => {
       const revision = branchRevision;
-      const q = args.trim() ? findQuestion(args, ctx) : pending.size ? await pickQuestion(ctx) : findQuestion(args, ctx);
+      const signal = branchController.signal;
+      const q = args.trim() ? findQuestion(args, ctx) : pending.size ? await pickQuestion(ctx, signal) : findQuestion(args, ctx);
       if (!q) return;
-      const stillPending = () => branchRevision === revision && pending.get(q.id) === q;
-      const answer = await choose(q, ctx, undefined, stillPending);
+      const stillPending = () => !signal.aborted && branchRevision === revision && pending.get(q.id) === q;
+      const answer = await choose(q, ctx, signal, stillPending);
       if (answer === undefined) {
         if (stillPending()) ctx.ui.notify(`質問 #${q.id} は回答待ちのままです`, "info");
         return;
@@ -206,6 +208,8 @@ export default function (pi: ExtensionAPI) {
   });
 
   function restore(ctx: ExtensionContext) {
+    branchController.abort();
+    branchController = new AbortController();
     branchRevision++;
     pending.clear();
     deliveries.clear();
@@ -230,4 +234,5 @@ export default function (pi: ExtensionAPI) {
   }
   pi.on("session_start", (_event, ctx) => restore(ctx));
   pi.on("session_tree", (_event, ctx) => restore(ctx));
+  pi.on("session_shutdown", () => branchController.abort());
 }

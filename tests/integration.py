@@ -127,7 +127,20 @@ try:
  assert any(e.get('type') == 'tool_execution_end' and e.get('toolName') == 'ask_user' and e.get('isError') for e in c.events), c.events
  assert not any('\x1b' in (e.get('message') or '') or any('\x1b' in line for line in (e.get('widgetLines') or [])) for e in c.events if e.get('type') == 'extension_ui_request'), c.events
  c.close()
- print('Pi RPC: restoration, answers, dismissal, parallel work, and invalid inputs')
+ # An answer dialog waiting in the old session must not block replacement or submit late.
+ requests.clear(); unsafe_case = False; session = tmp + '/switch-dialog.jsonl'
+ c=Client(); c.send({'id':'switch-init','type':'prompt','message':'hello'})
+ c.until(lambda x:x.get('type')=='agent_settled')
+ c.send({'id':'old-answer','type':'prompt','message':'/answer 1'})
+ old_dialog=c.until(lambda x:x.get('method')=='select')
+ c.send({'id':'new-session','type':'new_session'})
+ c.until(lambda x: all(any(e.get('id') == key and e.get('type') == 'response' and e.get('success') for e in c.events) for key in ('old-answer', 'new-session')))
+ c.send({'type':'extension_ui_response','id':old_dialog['id'],'value':'1. A'})
+ c.send({'id':'state-after-switch','type':'get_state'})
+ c.until(lambda x:x.get('type')=='response' and x.get('id')=='state-after-switch' and x.get('success'))
+ assert not any(message.get('role') == 'user' and '質問 #1' in json.dumps(message.get('content'), ensure_ascii=False) for req in requests for message in req.get('messages', [])), requests
+ c.close()
+ print('Pi RPC: restoration, answers, dismissal, switching, parallel work, and invalid inputs')
 finally:
  release_followup.set()
  for client in clients: client.close()
