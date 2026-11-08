@@ -173,6 +173,26 @@ try:
  c.until(lambda x:x.get('type')=='agent_settled')
  assert any(message.get('role') == 'user' and '#13' in json.dumps(message.get('content'), ensure_ascii=False) for req in requests for message in req.get('messages', [])), requests
  c.close()
+ # A picker refreshed after a concurrent dismissal remains usable.
+ requests.clear(); session = tmp + '/stale-picker.jsonl'
+ c=Client(); c.send({'id':'stale-init','type':'prompt','message':'hello'})
+ c.until(lambda x:x.get('type')=='agent_settled')
+ c.send({'id':'stale-answer','type':'prompt','message':'/answer'})
+ stale=c.until(lambda x:x.get('method')=='select')
+ stale_choice=next(option for option in stale['options'] if option.startswith('#1 '))
+ c.send({'id':'stale-dismiss','type':'prompt','message':'/ask-dismiss 1'})
+ c.until(lambda x:x.get('type')=='agent_settled')
+ c.send({'type':'extension_ui_response','id':stale['id'],'value':stale_choice})
+ refreshed=c.until(lambda x:x.get('method')=='select')
+ assert not any(option.startswith('#1 ') for option in refreshed['options']), refreshed
+ selected=next(option for option in refreshed['options'] if option.startswith('#2 '))
+ c.send({'type':'extension_ui_response','id':refreshed['id'],'value':selected})
+ req=c.until(lambda x:x.get('method')=='select')
+ assert req['title']=='Question 2?', req
+ c.send({'type':'extension_ui_response','id':req['id'],'value':'1. A'})
+ c.until(lambda x:x.get('type')=='agent_settled')
+ assert any(message.get('role') == 'user' and '#2' in json.dumps(message.get('content'), ensure_ascii=False) and '回答' in json.dumps(message.get('content'), ensure_ascii=False) for req in requests for message in req.get('messages', [])), requests
+ c.close()
  print('Pi RPC: restoration, answers, pagination, dismissal, switching, parallel work, and invalid inputs')
 finally:
  release_followup.set()

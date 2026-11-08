@@ -576,3 +576,23 @@ test('the picker adjusts when a question is dismissed between pages', async () =
   assert.equal(dialog, 4);
   assert.match(s.sent[1][0], /#5「Question 5\?」への回答: A/);
 });
+
+test('the picker refreshes when its selected question was dismissed concurrently', async () => {
+  const s = setup();
+  await s.ask({ question: 'First?', options: ['A', 'B'], mode: 'async' });
+  await s.ask({ question: 'Second?', options: ['A', 'B'], mode: 'async' });
+  await s.dismiss.handler('1', s.ctx);
+  let dialog = 0;
+  s.ctx.ui.select = async (_title, choices) => {
+    dialog++;
+    if (dialog === 1) {
+      s.handlers.get('message_start')!({ message: { role: 'user', content: [{ type: 'text', text: s.sent[0][0] }] } }, s.ctx);
+      return choices.find(choice => choice.startsWith('#1 '));
+    }
+    if (dialog === 2) return choices.find(choice => choice.startsWith('#2 '));
+    return '1. A';
+  };
+  await s.command.handler('', s.ctx);
+  assert.equal(dialog, 3);
+  assert.match(s.sent[1][0], /#2「Second\?」への回答: A/);
+});

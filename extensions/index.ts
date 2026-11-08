@@ -99,7 +99,9 @@ export default function (pi: ExtensionAPI) {
         if (selected === previous && page > 0) { page--; continue; }
         if (selected === next && page + 1 < totalPages) { page++; continue; }
         const q = pageQuestions[choices.indexOf(selected)];
-        return q && pending.get(q.id) === q ? q : undefined;
+        if (!q) return undefined;
+        if (pending.get(q.id) === q) return q;
+        ctx.ui.notify(`質問 #${q.id} は回答待ちではありません`, "info");
       }
       return undefined;
     }, signal, () => branchRevision === revision);
