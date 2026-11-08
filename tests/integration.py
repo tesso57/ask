@@ -93,7 +93,19 @@ try:
  c.until(lambda x:x.get('method')=='setWidget' and '#1 Pick one' in str(x.get('widgetLines')))
  assert not any(x.get('type') == 'tool_execution_end' and x.get('toolName') == 'bash' for x in c.events), c.events
  c.until(lambda x:x.get('type')=='agent_settled'); c.close()
- print('Pi RPC: session restoration, idle/streaming answers, and parallel independent work')
+ # Dismissing informs the model that no answer or approval was given.
+ requests.clear(); parallel_case = False; session = tmp + '/dismiss.jsonl'
+ c=Client(); c.send({'id':'dismiss-init','type':'prompt','message':'hello'})
+ c.until(lambda x:x.get('type')=='agent_settled')
+ c.send({'id':'dismiss','type':'prompt','message':'/ask-dismiss 1'})
+ c.until(lambda x:x.get('type')=='message_start' and x.get('message',{}).get('role')=='user' and '取り下げ' in json.dumps(x.get('message',{}), ensure_ascii=False))
+ c.until(lambda x:x.get('type')=='agent_settled'); c.close()
+ assert any(message.get('role') == 'user' and '未回答' in json.dumps(message.get('content'), ensure_ascii=False) and '承認' in json.dumps(message.get('content'), ensure_ascii=False) for req in requests for message in req.get('messages', [])), requests
+ c=Client(); c.send({'id':'dismiss-check','type':'prompt','message':'/answer 1'})
+ notice=c.until(lambda x:x.get('method')=='notify')
+ assert 'ありません' in notice.get('message',''), notice
+ c.close()
+ print('Pi RPC: restoration, answers, dismissal, and parallel independent work')
 finally:
  release_followup.set()
  for client in clients: client.close()
