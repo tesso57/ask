@@ -235,3 +235,31 @@ test('a transformed answer remains acknowledged after restoring the session', as
   s.handlers.get('session_start')({}, s.ctx);
   assert.equal(s.widget, undefined);
 });
+
+test('ambiguous transformed messages do not acknowledge a different question', async () => {
+  const s = setup();
+  await s.ask({ question: 'First question with a longer title?', options: ['A', 'B'], mode: 'async' });
+  await s.ask({ question: 'Second?', options: ['A', 'B'], mode: 'async' });
+  s.selections.push('1. A', '2. B');
+  await s.command.handler('1', s.ctx);
+  await s.command.handler('2', s.ctx);
+  const message = `Previous context: ${s.sent[0][0]}\nNew answer: ${s.sent[1][0]}`;
+  s.handlers.get('message_start')({ message: { role: 'user', content: [{ type: 'text', text: message }] } }, s.ctx);
+  assert.match(s.widget[0], /#1/);
+  assert.match(s.widget[0], /#2/);
+  s.entries.push({ type: 'message', message: { role: 'user', content: [{ type: 'text', text: message }] } });
+  s.handlers.get('session_start')({}, s.ctx);
+  assert.match(s.widget[0], /#1/);
+  assert.match(s.widget[0], /#2/);
+});
+
+test('multiple matching attempts for the same question remain unambiguous', async () => {
+  const s = setup();
+  await s.ask({ ...question, mode: 'async' });
+  s.selections.push('1. A', '2. B');
+  await s.command.handler('1', s.ctx);
+  await s.command.handler('1', s.ctx);
+  const message = `${s.sent[0][0]}\n${s.sent[1][0]}`;
+  s.handlers.get('message_start')({ message: { role: 'user', content: [{ type: 'text', text: message }] } }, s.ctx);
+  assert.equal(s.widget, undefined);
+});

@@ -137,16 +137,14 @@ export default function (pi: ExtensionAPI) {
 
   function accept(text: string | undefined) {
     if (text === undefined) return false;
-    // Other extensions may wrap injected user messages with context. Match the full
-    // answer text inside such wrappers, preferring the longest match if they overlap.
+    // Input extensions may wrap a reply with context. A wrapped message can
+    // mention several replies, so only acknowledge it if the question is unambiguous.
     let q = deliveries.get(text);
     if (!q) {
-      let longest = 0;
       for (const [message, question] of deliveries) {
-        if (message.length > longest && text.includes(message)) {
-          longest = message.length;
-          q = question;
-        }
+        if (!text.includes(message)) continue;
+        if (q && q !== question) return false;
+        q = question;
       }
     }
     if (!q || pending.get(q.id) !== q) return false;
