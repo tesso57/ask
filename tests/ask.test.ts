@@ -361,3 +361,44 @@ test('an answer dialog open during branch navigation does not submit to the new 
   await answering;
   assert.equal(s.sent.length, 0);
 });
+
+test('terminal control characters in generated questions or choices are rejected', async () => {
+  for (const params of [
+    { question: 'Choose?\u001b]52;c;SGVsbG8=\u0007', options: ['A', 'B'], mode: 'async' as const },
+    { question: 'Choose?', options: ['A', 'B\u001b[2J'], mode: 'sync' as const },
+  ]) {
+    const s = setup();
+    const result = await s.ask(params);
+    assert.equal(result.details.status, 'invalid');
+    assert.equal(result.isError, true);
+    assert.equal(s.entries.length, 0);
+    assert.equal(s.widget, undefined);
+  }
+});
+
+test('legacy pending questions do not send terminal controls to the UI', async () => {
+  const s = setup();
+  s.entries.push({ type: 'custom', customType: 'ask-user-state-v1', data: {
+    kind: 'question', question: { id: 1, question: 'Choose?\u001b]52;c;SGVsbG8=\u0007', options: ['A', 'B\u001b[2J'] },
+  } });
+  s.handlers.get('session_start')!({}, s.ctx);
+  assert.ok(!s.widget!.join('').includes('\u001b'));
+  let displayed = '';
+  s.ctx.ui.select = async (title, choices) => { displayed = title + choices.join(''); return undefined; };
+  await s.command.handler('1', s.ctx);
+  assert.ok(!displayed.includes('\u001b'));
+  s.ctx.ui.select = async () => '2. B';
+  await s.command.handler('1', s.ctx);
+  assert.ok(!s.sent[0][0].includes('\u001b'));
+});
+
+test('free-text answers with terminal controls remain unanswered', async () => {
+  const s = setup();
+  await s.ask({ ...question, mode: 'async' });
+  s.selections.push('3. その他（自由入力）');
+  s.inputs.push('unsafe\u001b]52;c;SGVsbG8=\u0007');
+  await s.command.handler('1', s.ctx);
+  assert.equal(s.sent.length, 0);
+  assert.match(s.widget![0], /#1/);
+  assert.ok(s.notifications.some(([message]) => message.includes('制御文字')));
+});

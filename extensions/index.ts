@@ -1,7 +1,13 @@
 import type { ExtensionAPI, ExtensionContext, MessageStartEvent } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { stripVTControlCharacters } from "node:util";
 
 type Question = { id: number; question: string; options: string[] };
+const unsafeControls = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/;
+
+function safeTerminalText(text: string): string {
+  return stripVTControlCharacters(text).replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g, "");
+}
 type StoredEntry = { kind: "question"; question: Question } | { kind: "delivery"; id: number; message: string };
 
 function isStoredEntry(value: unknown): value is StoredEntry {
@@ -91,6 +97,10 @@ export default function (pi: ExtensionAPI) {
     if (selected === undefined) return undefined;
     if (selected === custom) {
       const answer = await ctx.ui.input("自由入力", undefined, { signal });
+      if (answer && unsafeControls.test(answer)) {
+        ctx.ui.notify("制御文字を含む回答は送信できません", "warning");
+        return undefined;
+      }
       return answer?.trim() || undefined;
     }
     const index = choices.indexOf(selected);
@@ -110,8 +120,8 @@ export default function (pi: ExtensionAPI) {
     async execute(_id, params, signal, _onUpdate, ctx) {
       if (!ctx.hasUI) return { content: [{ type: "text", text: "Cannot ask: this session has no interactive UI. No answer was given." }], details: { status: "unavailable" } };
       const options = params.options.map(option => option.trim());
-      if (!params.question.trim() || options.some(option => !option) || new Set(options).size !== options.length) {
-        return { content: [{ type: "text", text: "Provide a non-empty question and distinct, non-empty options." }], details: { status: "invalid" }, isError: true };
+      if (!params.question.trim() || options.some(option => !option) || new Set(options).size !== options.length || [params.question, ...params.options].some(text => unsafeControls.test(text))) {
+        return { content: [{ type: "text", text: "Provide a non-empty question and distinct, non-empty options without terminal control characters." }], details: { status: "invalid" }, isError: true };
       }
       const q = { id: nextId++, question: params.question, options: params.options };
       if (params.mode === "sync") {
@@ -205,7 +215,7 @@ export default function (pi: ExtensionAPI) {
         const data = entry.data;
         if (!isStoredEntry(data)) continue;
         if (data.kind === "question") {
-          const q = data.question;
+          const q = { ...data.question, question: safeTerminalText(data.question.question), options: data.question.options.map(safeTerminalText) };
           pending.set(q.id, q);
           nextId = Math.max(nextId, q.id + 1);
         } else if (data.kind === "delivery") {
