@@ -5,6 +5,7 @@ requests = []
 hold_followup = False
 parallel_case = False
 many_case = False
+sync_case = False
 invalid_case = False
 unsafe_case = False
 followup_started = threading.Event()
@@ -19,7 +20,7 @@ class Handler(BaseHTTPRequestHandler):
       if not release_followup.wait(10): raise TimeoutError('follow-up was not released')
     base={'id':'test','object':'chat.completion.chunk','created':1,'model':'test-model'}
     if len(requests) == 1:
-      args = json.dumps({'question': 'Pick one\x1b]52;c;SGVsbG8=\x07' if unsafe_case else 'Pick one', 'options': ['A', ' A '] if invalid_case else ['A', 'B'], 'mode': 'async'})
+      args = json.dumps({'question': 'Pick one\x1b]52;c;SGVsbG8=\x07' if unsafe_case else 'Pick one', 'options': ['A', ' A '] if invalid_case else ['A', 'B'], 'mode': 'sync' if sync_case else 'async'})
       tools = [{'index': 0, 'id': 'call_1', 'type': 'function', 'function': {'name': 'ask_user', 'arguments': args}}]
       if many_case:
         tools = [{'index': i, 'id': f'call_{i}', 'type': 'function', 'function': {'name': 'ask_user', 'arguments': json.dumps({'question': f'Question {i + 1}?', 'options': ['A', 'B'], 'mode': 'async'})}} for i in range(13)]
@@ -193,7 +194,18 @@ try:
  c.until(lambda x:x.get('type')=='agent_settled')
  assert any(message.get('role') == 'user' and '#2' in json.dumps(message.get('content'), ensure_ascii=False) and '回答' in json.dumps(message.get('content'), ensure_ascii=False) for req in requests for message in req.get('messages', [])), requests
  c.close()
- print('Pi RPC: restoration, answers, pagination, dismissal, switching, parallel work, and invalid inputs')
+ # Synchronous mode waits for a free-text answer and returns it as a tool result.
+ requests.clear(); many_case = False; sync_case = True; session = tmp + '/sync.jsonl'
+ c=Client(); c.send({'id':'sync-init','type':'prompt','message':'hello'})
+ req=c.until(lambda x:x.get('method')=='select')
+ assert req['title']=='Pick one', req
+ c.send({'type':'extension_ui_response','id':req['id'],'value':req['options'][-1]})
+ req=c.until(lambda x:x.get('method')=='input')
+ c.send({'type':'extension_ui_response','id':req['id'],'value':'custom answer'})
+ c.until(lambda x:x.get('type')=='agent_settled')
+ assert any(message.get('role') == 'tool' and 'custom answer' in json.dumps(message.get('content'), ensure_ascii=False) for req in requests for message in req.get('messages', [])), requests
+ c.close()
+ print('Pi RPC: sync free text, restoration, answers, pagination, dismissal, switching, parallel work, and invalid inputs')
 finally:
  release_followup.set()
  for client in clients: client.close()
