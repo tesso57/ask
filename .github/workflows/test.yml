@@ -5,9 +5,19 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [minimum, development]
     steps:
       - uses: actions/checkout@v6
-      - uses: actions/setup-node@v6
+      - if: matrix.node == 'minimum'
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22.19.0'
+          cache: npm
+      - if: matrix.node == 'development'
+        uses: actions/setup-node@v6
         with:
           node-version-file: .nvmrc
           cache: npm
