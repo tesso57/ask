@@ -29,6 +29,7 @@ export default function (pi: ExtensionAPI) {
   let dialogTail: Promise<void> = Promise.resolve();
   let branchRevision = 0;
   let branchController = new AbortController();
+  let pendingController = new AbortController();
 
   function summarize(text: string, limit = 24): string {
     const chars = [...text.replace(/\s+/g, " ").trim()];
@@ -78,8 +79,9 @@ export default function (pi: ExtensionAPI) {
     return withDialog(() => showQuestion(q, ctx, signal), signal, canOpen);
   }
 
-  async function pickQuestion(ctx: ExtensionContext, signal: AbortSignal): Promise<Question | undefined> {
+  async function pickQuestion(ctx: ExtensionContext, branchSignal: AbortSignal): Promise<Question | undefined> {
     const revision = branchRevision;
+    const signal = AbortSignal.any([branchSignal, pendingController.signal]);
     return withDialog(async () => {
       const pageSize = 5;
       let page = 0;
@@ -228,6 +230,10 @@ export default function (pi: ExtensionAPI) {
     }
     if (!q || pending.get(q.id) !== q) return false;
     pending.delete(q.id);
+    if (!pending.size) {
+      pendingController.abort();
+      pendingController = new AbortController();
+    }
     for (const controller of answerDialogs.get(q) ?? []) controller.abort();
     for (const [message, question] of deliveries) if (question === q) deliveries.delete(message);
     return true;

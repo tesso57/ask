@@ -596,3 +596,26 @@ test('the picker refreshes when its selected question was dismissed concurrently
   assert.equal(dialog, 3);
   assert.match(s.sent[1][0], /#2「Second\?」への回答: A/);
 });
+
+test('the pending-question picker closes when its last question is dismissed', async () => {
+  const s = setup();
+  await s.ask({ ...question, mode: 'async' });
+  let opened!: () => void;
+  const ready = new Promise<void>(resolve => { opened = resolve; });
+  s.ctx.ui.select = (_title, _choices, options) => new Promise<string | undefined>(resolve => {
+    opened();
+    options?.signal?.addEventListener('abort', () => resolve(undefined), { once: true });
+  });
+  const picker = s.command.handler('', s.ctx);
+  await ready;
+  await s.dismiss.handler('1', s.ctx);
+  s.handlers.get('message_start')!({ message: { role: 'user', content: [{ type: 'text', text: s.sent[0][0] }] } }, s.ctx);
+  const timeout = new Promise(resolve => setTimeout(() => resolve('picker remained open'), 250));
+  assert.notEqual(await Promise.race([picker, timeout]), 'picker remained open');
+  assert.equal(s.sent.length, 1);
+  await s.ask({ question: 'New question?', options: ['A', 'B'], mode: 'async' });
+  let dialog = 0;
+  s.ctx.ui.select = async (_title, choices) => dialog++ === 0 ? choices[0] : '1. A';
+  await s.command.handler('', s.ctx);
+  assert.match(s.sent[1][0], /#2「New question\?」への回答: A/);
+});
