@@ -6,6 +6,7 @@ import { createMockPi } from "./helpers/mock-pi.ts";
 
 function setup() {
   const mock = createMockPi();
+  mock.context.mode = "rpc";
   register(mock.pi);
   const tool = mock.tools.get("ask_user");
   assert.ok(tool);

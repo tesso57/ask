@@ -28,7 +28,7 @@ async function runQuestion(mode: "sync" | "async") {
     try {
       session.modelRuntime.hasConfiguredAuth = () => true;
       session.agent.streamFunction = fake.stream;
-      await session.bindExtensions({ uiContext: mock.context.ui, mode: "tui" });
+      await session.bindExtensions({ uiContext: mock.context.ui, mode: "rpc" });
       await session.prompt("Choose how to proceed");
       const result = session.messages.find(message => message.role === "toolResult" && message.toolName === "ask_user");
       assert.ok(result && result.role === "toolResult");

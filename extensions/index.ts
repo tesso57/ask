@@ -1,13 +1,9 @@
 import type { ExtensionAPI, ExtensionContext, MessageStartEvent } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { stripVTControlCharacters } from "node:util";
+import { showInlineQuestion } from "./question-ui.ts";
+import { safeTerminalText, unsafeControls } from "./text-safety.ts";
 
 type Question = { id: number; question: string; options: string[] };
-const unsafeControls = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/;
-
-function safeTerminalText(text: string): string {
-  return stripVTControlCharacters(text).replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g, "");
-}
 type StoredEntry = { kind: "question"; question: Question } | { kind: "delivery"; id: number; message: string };
 
 function isStoredEntry(value: unknown): value is StoredEntry {
@@ -110,6 +106,14 @@ export default function (pi: ExtensionAPI) {
   }
 
   async function showQuestion(q: Question, ctx: ExtensionContext, signal?: AbortSignal): Promise<string | undefined> {
+    if (ctx.mode === "tui") {
+      const answer = await showInlineQuestion(ctx, q, signal);
+      if (answer && unsafeControls.test(answer)) {
+        ctx.ui.notify("制御文字を含む回答は送信できません", "warning");
+        return undefined;
+      }
+      return answer;
+    }
     // Number choices so an option named like the free-text entry stays distinct.
     const choices = q.options.map((option, i) => `${i + 1}. ${option}`);
     const custom = `${choices.length + 1}. ${other}`;
