@@ -65,6 +65,10 @@ class Client:
   try: self.p.wait(timeout=5)
   except subprocess.TimeoutExpired:
    self.p.kill(); self.p.wait(timeout=5)
+def received_delivery(event, text):
+ message = event.get('message', {})
+ return event.get('type') == 'message_start' and message.get('role') == 'custom' and message.get('customType') == 'ask-user-delivery-v2' and text in json.dumps(message.get('content'), ensure_ascii=False)
+
 try:
  c=Client(); c.send({'id':'init','type':'prompt','message':'hello'})
  c.until(lambda x:x.get('type')=='agent_settled')
@@ -77,7 +81,7 @@ try:
  c.send({'type':'extension_ui_response','id':req['id'],'value':req['options'][0]})
  req=c.until(lambda x:x.get('method')=='select')
  c.send({'type':'extension_ui_response','id':req['id'],'value':'2. B'})
- c.until(lambda x:x.get('type')=='message_start' and x.get('message',{}).get('role')=='user' and 'B' in str(x.get('message',{}).get('content')))
+ c.until(lambda x:received_delivery(x, '回答: B'))
  c.until(lambda x:x.get('type')=='agent_settled'); c.close()
  assert any(message.get('role') == 'user' and '質問 #1' in json.dumps(message.get('content'), ensure_ascii=False) and 'B' in json.dumps(message.get('content'), ensure_ascii=False) for req in requests for message in req.get('messages', [])), requests
  c=Client(); c.send({'id':'again','type':'prompt','message':'/answer 1'})
@@ -96,7 +100,7 @@ try:
  c.send({'type':'extension_ui_response','id':req['id'],'value':'1. A'})
  c.until(lambda x:x.get('id')=='answer-stream' and x.get('type')=='response' and x.get('success'))
  release_followup.set()
- c.until(lambda x:x.get('type')=='message_start' and x.get('message',{}).get('role')=='user' and '質問 #1' in str(x.get('message',{}).get('content')))
+ c.until(lambda x:received_delivery(x, '回答: A'))
  c.until(lambda x:x.get('type')=='agent_settled'); c.close()
  assert any(message.get('role') == 'user' and '質問 #1' in json.dumps(message.get('content'), ensure_ascii=False) for req in requests for message in req.get('messages', [])), requests
  # The pending question must be displayed while an earlier, independent tool is still running.
@@ -110,7 +114,7 @@ try:
  c=Client(); c.send({'id':'dismiss-init','type':'prompt','message':'hello'})
  c.until(lambda x:x.get('type')=='agent_settled')
  c.send({'id':'dismiss','type':'prompt','message':'/ask-dismiss 1'})
- c.until(lambda x:x.get('type')=='message_start' and x.get('message',{}).get('role')=='user' and '取り下げ' in json.dumps(x.get('message',{}), ensure_ascii=False))
+ c.until(lambda x:received_delivery(x, '取り下げ'))
  c.until(lambda x:x.get('type')=='agent_settled'); c.close()
  assert any(message.get('role') == 'user' and '未回答' in json.dumps(message.get('content'), ensure_ascii=False) and '承認' in json.dumps(message.get('content'), ensure_ascii=False) for req in requests for message in req.get('messages', [])), requests
  c=Client(); c.send({'id':'dismiss-check','type':'prompt','message':'/answer 1'})

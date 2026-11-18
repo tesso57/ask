@@ -1,14 +1,23 @@
-import type { ExtensionAPI, ExtensionContext, MessageStartEvent } from "@earendil-works/pi-coding-agent";
+import { randomUUID } from "node:crypto";
+import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext, MessageStartEvent } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { showInlineQuestion } from "./question-ui.ts";
 import { safeTerminalText, unsafeControls } from "./text-safety.ts";
 
 type Question = { id: number; question: string; options: string[] };
-type StoredEntry = { kind: "question"; question: Question } | { kind: "delivery"; id: number; message: string };
+type DeliveryMessage = Extract<MessageStartEvent["message"], { role: "custom" }>;
+type StoredEntry =
+  | { kind: "question"; question: Question }
+  | { kind: "attempt"; id: number; attemptId: string }
+  | { kind: "delivery"; id: number; message: string };
+
+const entryType = "ask-user-state-v1";
+const deliveryType = "ask-user-delivery-v2";
 
 function isStoredEntry(value: unknown): value is StoredEntry {
   if (!value || typeof value !== "object") return false;
   const entry = value as Record<string, unknown>;
+  if (entry.kind === "attempt") return Number.isSafeInteger(entry.id) && typeof entry.attemptId === "string" && !!entry.attemptId;
   if (entry.kind === "delivery") return Number.isSafeInteger(entry.id) && typeof entry.message === "string";
   if (entry.kind !== "question" || !entry.question || typeof entry.question !== "object") return false;
   const q = entry.question as Record<string, unknown>;
@@ -21,7 +30,6 @@ export default function (pi: ExtensionAPI) {
   const deliveries = new Map<string, Question>();
   const answerDialogs = new Map<Question, Set<AbortController>>();
   const other = "その他（自由入力）";
-  const entryType = "ask-user-state-v1";
   let dialogTail: Promise<void> = Promise.resolve();
   let branchRevision = 0;
   let branchController = new AbortController();
@@ -166,12 +174,16 @@ export default function (pi: ExtensionAPI) {
     return q;
   }
 
-  function deliver(q: Question, message: string) {
-    // Pi queues user messages without a delivery acknowledgment. Persist the attempt so
-    // a later user message can acknowledge it, including after a session restart.
-    pi.appendEntry(entryType, { kind: "delivery", id: q.id, message });
-    deliveries.set(message, q);
-    pi.sendUserMessage(message, { deliverAs: "steer" });
+  async function deliver(q: Question, message: string, ctx: ExtensionCommandContext) {
+    const signal = branchController.signal;
+    if (!ctx.isIdle() && !ctx.signal) await ctx.waitForIdle();
+    if (signal.aborted || pending.get(q.id) !== q) return;
+    const attemptId = randomUUID();
+    pi.appendEntry(entryType, { kind: "attempt", id: q.id, attemptId } satisfies StoredEntry);
+    deliveries.set(attemptId, q);
+    pi.sendMessage({ customType: deliveryType, content: message, display: true, details: attemptId }, {
+      deliverAs: "steer", triggerTurn: true,
+    });
   }
 
   pi.registerCommand("answer", {
@@ -195,7 +207,7 @@ export default function (pi: ExtensionAPI) {
         }
         // A session switch or another answer may have removed the question while the dialog was open.
         if (!stillPending()) return;
-        deliver(q, `質問 #${q.id}「${q.question}」への回答: ${answer}`);
+        await deliver(q, `質問 #${q.id}「${q.question}」への回答: ${answer}`, ctx);
       } finally {
         dialogs.delete(controller);
         if (!dialogs.size) answerDialogs.delete(q);
@@ -208,7 +220,7 @@ export default function (pi: ExtensionAPI) {
     handler: async (args, ctx) => {
       const q = findQuestion(args, ctx);
       if (!q) return;
-      deliver(q, `ユーザーは質問 #${q.id}「${q.question}」を取り下げました。未回答であり、選択や承認を意味しません。`);
+      await deliver(q, `ユーザーは質問 #${q.id}「${q.question}」を取り下げました。未回答であり、選択や承認を意味しません。`, ctx);
     },
   });
 
@@ -220,18 +232,7 @@ export default function (pi: ExtensionAPI) {
     return content.flatMap(part => part?.type === "text" && typeof part.text === "string" ? [part.text] : []).join("\n");
   }
 
-  function accept(text: string | undefined) {
-    if (text === undefined) return false;
-    // Input extensions may wrap a reply with context. A wrapped message can
-    // mention several replies, so only acknowledge it if the question is unambiguous.
-    let q = deliveries.get(text);
-    if (!q) {
-      for (const [message, question] of deliveries) {
-        if (!text.includes(message)) continue;
-        if (q && q !== question) return false;
-        q = question;
-      }
-    }
+  function accept(q: Question | undefined) {
     if (!q || pending.get(q.id) !== q) return false;
     pending.delete(q.id);
     if (!pending.size) {
@@ -239,12 +240,50 @@ export default function (pi: ExtensionAPI) {
       pendingController = new AbortController();
     }
     for (const controller of answerDialogs.get(q) ?? []) controller.abort();
-    for (const [message, question] of deliveries) if (question === q) deliveries.delete(message);
+    for (const [attemptId, question] of deliveries) if (question === q) deliveries.delete(attemptId);
     return true;
   }
 
-  pi.on("message_start", (event, ctx) => {
-    if (accept(messageText(event.message))) refresh(ctx);
+  function acceptDelivery(details: unknown) {
+    return typeof details === "string" && accept(deliveries.get(details));
+  }
+
+  function hasAttemptOnBranch(attemptId: unknown, ctx: ExtensionContext) {
+    return typeof attemptId === "string" && ctx.sessionManager.getBranch().some(entry =>
+      entry.type === "custom" && entry.customType === entryType &&
+      isStoredEntry(entry.data) && entry.data.kind === "attempt" && entry.data.attemptId === attemptId,
+    );
+  }
+
+  function discard(message: DeliveryMessage) {
+    // Pi emits and saves this same message object. Clear it before publication
+    // so a dispatch deferred by Pi cannot expose its payload on a sibling branch.
+    message.display = false;
+    message.content = [];
+    delete message.details;
+  }
+
+  pi.on("before_agent_start", (event, ctx) => {
+    if (event.messageType !== "custom" || event.message.customType !== deliveryType) return;
+    if (hasAttemptOnBranch(event.message.details, ctx)) return;
+    discard(event.message);
+    ctx.abort();
+  });
+
+  pi.on("message_start", ({ message }, ctx) => {
+    if (message.role !== "custom" || message.customType !== deliveryType) return;
+    if (!hasAttemptOnBranch(message.details, ctx)) {
+      discard(message);
+      return;
+    }
+    if (acceptDelivery(message.details)) refresh(ctx);
+  });
+
+  pi.on("context", ({ messages }) => {
+    // Aborting a run can leave its empty trigger in history.
+    return { messages: messages.filter(message =>
+      message.role !== "custom" || message.customType !== deliveryType || message.details !== undefined,
+    ) };
   });
 
   function restore(ctx: ExtensionContext) {
@@ -254,6 +293,10 @@ export default function (pi: ExtensionAPI) {
     pending.clear();
     deliveries.clear();
     nextId = 1;
+    const legacy = new Map<string, Question>();
+    const forgetLegacy = (q: Question) => {
+      for (const [message, question] of legacy) if (question === q) legacy.delete(message);
+    };
     for (const entry of ctx.sessionManager.getBranch()) {
       if (entry.type === "custom" && entry.customType === entryType) {
         const data = entry.data;
@@ -262,12 +305,27 @@ export default function (pi: ExtensionAPI) {
           const q = { ...data.question, question: safeTerminalText(data.question.question), options: data.question.options.map(safeTerminalText) };
           pending.set(q.id, q);
           nextId = Math.max(nextId, q.id + 1);
-        } else if (data.kind === "delivery") {
+        } else {
           const q = pending.get(data.id);
-          if (q) deliveries.set(data.message, q);
+          if (!q) continue;
+          if (data.kind === "attempt") {
+            deliveries.set(data.attemptId, q);
+            forgetLegacy(q);
+          } else if (data.message) {
+            legacy.set(data.message, q);
+          }
         }
-      } else if (entry.type === "message") {
-        accept(messageText(entry.message));
+      } else if (entry.type === "custom_message" && entry.customType === deliveryType) {
+        acceptDelivery(entry.details);
+      } else if (entry.type === "message" && legacy.size) {
+        const text = messageText(entry.message);
+        if (text === undefined) continue;
+        const exact = legacy.get(text);
+        const matching = exact ? [exact] : [...new Set(
+          [...legacy].filter(([message]) => text.includes(message)).map(([, q]) => q),
+        )];
+        const q = matching[0];
+        if (matching.length === 1 && accept(q)) forgetLegacy(q);
       }
     }
     refresh(ctx);
