@@ -37,6 +37,7 @@ export function createMockPi(responses: Responses = {}) {
     sessionManager,
     hasUI: true,
     mode: "tui",
+    isIdle: () => true,
     ui: {
       notify(message: string, type = "info") { notifications.push({ message, type }); },
       async confirm(title: string, message: string) { dialogs.push({ kind: "confirm", title, message }); return take("confirm"); },

@@ -14,7 +14,7 @@ test('async returns immediately, and delivers a later free-text answer', async (
   assert.match(s.sent[0][0], /custom answer/);
   assert.equal(s.sent[0][1].deliverAs, 'steer');
   assert.match(s.widget![0], /#1/);
-  s.handlers.get('message_start')!({ message: { role: 'user', content: [{ type: 'text', text: s.sent[0][0] }] } }, s.ctx);
+  s.acknowledge(0);
   assert.equal(s.widget, undefined);
 });
 
@@ -141,7 +141,7 @@ test('reloading restores a failed delivery but not an accepted answer', async ()
   await s.command.handler('1', s.ctx);
   s.handlers.get('session_start')!({}, s.ctx);
   assert.match(s.widget![0], /#1/);
-  s.entries.push({ type: 'message', message: { role: 'user', content: [{ type: 'text', text: s.sent[0][0] }] } });
+  s.record(0);
   s.handlers.get('session_start')!({}, s.ctx);
   assert.equal(s.widget, undefined);
 });
@@ -202,27 +202,27 @@ test('many long pending questions keep the widget compact while retaining every 
   assert.equal(s.sent.length, 1);
 });
 
-test('a prefixed answer is acknowledged after input transformation', async () => {
+test('a wrapped delivery is acknowledged by its metadata', async () => {
   const s = setup();
   await s.ask({ ...question, mode: 'async' });
   s.selections.push('1. A');
   await s.command.handler('1', s.ctx);
-  s.handlers.get('message_start')!({ message: { role: 'user', content: [{ type: 'text', text: `Context: ${s.sent[0][0]}` }] } }, s.ctx);
+  s.acknowledge(0, { ...s.deliveries[0], content: `Context: ${s.sent[0][0]}` });
   assert.equal(s.widget, undefined);
 });
 
 
-test('a transformed answer remains acknowledged after restoring the session', async () => {
+test('a wrapped delivery retains its acknowledgment after restoring the session', async () => {
   const s = setup();
   await s.ask({ ...question, mode: 'async' });
   s.selections.push('2. B');
   await s.command.handler('1', s.ctx);
-  s.entries.push({ type: 'message', message: { role: 'user', content: [{ type: 'text', text: `Context: ${s.sent[0][0]}` }] } });
+  s.entries.push({ ...s.deliveries[0], type: 'custom_message', content: `Context: ${s.sent[0][0]}` });
   s.handlers.get('session_start')!({}, s.ctx);
   assert.equal(s.widget, undefined);
 });
 
-test('ambiguous transformed messages do not acknowledge a different question', async () => {
+test('quoting multiple submitted answers does not acknowledge either question', async () => {
   const s = setup();
   await s.ask({ question: 'First question with a longer title?', options: ['A', 'B'], mode: 'async' });
   await s.ask({ question: 'Second?', options: ['A', 'B'], mode: 'async' });
@@ -239,15 +239,31 @@ test('ambiguous transformed messages do not acknowledge a different question', a
   assert.match(s.widget![0], /#2/);
 });
 
-test('multiple matching attempts for the same question remain unambiguous', async () => {
-  const s = setup();
-  await s.ask({ ...question, mode: 'async' });
-  s.selections.push('1. A', '2. B');
-  await s.command.handler('1', s.ctx);
-  await s.command.handler('1', s.ctx);
-  const message = `${s.sent[0][0]}\n${s.sent[1][0]}`;
-  s.handlers.get('message_start')!({ message: { role: 'user', content: [{ type: 'text', text: message }] } }, s.ctx);
-  assert.equal(s.widget, undefined);
+test('a delayed receipt for either identical retry can resolve the question', async () => {
+  for (const firstReceipt of [0, 1]) {
+    const s = setup();
+    await s.ask({ ...question, mode: 'async' });
+    s.selections.push('1. A', '1. A');
+    await s.command.handler('1', s.ctx);
+    await s.command.handler('1', s.ctx);
+    assert.equal(s.sent[0][0], s.sent[1][0]);
+    assert.notEqual(s.deliveries[0].details, s.deliveries[1].details);
+    assert.match(s.widget![0], /#1/);
+
+    const quote = { role: 'user', content: s.sent[0][0] };
+    s.handlers.get('message_start')!({ message: quote }, s.ctx);
+    s.entries.push({ type: 'message', message: quote });
+    s.handlers.get('session_start')!({}, s.ctx);
+    assert.match(s.widget![0], /#1/);
+
+    s.acknowledge(firstReceipt);
+    assert.equal(s.widget, undefined);
+    s.record(firstReceipt);
+    s.acknowledge(1 - firstReceipt);
+    s.record(1 - firstReceipt);
+    s.handlers.get('session_start')!({}, s.ctx);
+    assert.equal(s.widget, undefined);
+  }
 });
 
 
@@ -258,9 +274,9 @@ test('a user can dismiss a pending question without giving an answer', async () 
   assert.match(s.sent[0][0], /取り下げ/);
   assert.match(s.sent[0][0], /未回答/);
   assert.match(s.widget![0], /#1/);
-  s.handlers.get('message_start')!({ message: { role: 'user', content: [{ type: 'text', text: s.sent[0][0] }] } }, s.ctx);
+  s.acknowledge(0);
   assert.equal(s.widget, undefined);
-  s.entries.push({ type: 'message', message: { role: 'user', content: [{ type: 'text', text: s.sent[0][0] }] } });
+  s.record(0);
   s.handlers.get('session_start')!({}, s.ctx);
   assert.equal(s.widget, undefined);
 });
@@ -272,6 +288,22 @@ test('a failed dismissal remains pending and can be retried', async () => {
   assert.match(s.widget![0], /#1/);
   await s.dismiss.handler('1', s.ctx);
   assert.equal(s.sent.length, 2);
+});
+
+test('a dismissal waiting on tree navigation cannot submit on the destination branch', async () => {
+  const s = setup();
+  await s.ask({ ...question, mode: 'async' });
+  const snapshot = [...s.entries];
+  let finishNavigation!: () => void;
+  s.ctx.isIdle = () => false;
+  s.ctx.waitForIdle = () => new Promise<void>(resolve => { finishNavigation = resolve; });
+  const dismissing = s.dismiss.handler('1', s.ctx);
+  s.setBranch(snapshot);
+  s.handlers.get('session_tree')!({}, s.ctx);
+  finishNavigation();
+  await dismissing;
+  assert.equal(s.sent.length, 0);
+  assert.match(s.widget![0], /#1 Choose/);
 });
 
 test('invalid questions do not present empty or indistinguishable choices', async () => {
@@ -489,7 +521,7 @@ test('an acknowledged dismissal closes any open answer dialog for that question'
   const answering = s.command.handler('1', s.ctx);
   await ready;
   await s.dismiss.handler('1', s.ctx);
-  s.handlers.get('message_start')!({ message: { role: 'user', content: [{ type: 'text', text: s.sent[0][0] }] } }, s.ctx);
+  s.acknowledge(0);
   const timeout = new Promise(resolve => setTimeout(() => resolve('dialog remained open'), 250));
   assert.notEqual(await Promise.race([answering, timeout]), 'dialog remained open');
   assert.equal(s.sent.length, 1);
@@ -508,7 +540,7 @@ test('dismissing one question leaves another question dialog open', async () => 
   const answering = s.command.handler('1', s.ctx);
   await new Promise(resolve => setImmediate(resolve));
   await s.dismiss.handler('2', s.ctx);
-  s.handlers.get('message_start')!({ message: { role: 'user', content: [{ type: 'text', text: s.sent[0][0] }] } }, s.ctx);
+  s.acknowledge(0);
   assert.equal(aborted, false);
   opened[0].resolve('1. A');
   await answering;
@@ -530,7 +562,7 @@ test('acknowledging a dismissal cancels active and queued dialogs for that quest
   await ready;
   const second = s.command.handler('1', s.ctx);
   await s.dismiss.handler('1', s.ctx);
-  s.handlers.get('message_start')!({ message: { role: 'user', content: [{ type: 'text', text: s.sent[0][0] }] } }, s.ctx);
+  s.acknowledge(0);
   const timeout = new Promise(resolve => setTimeout(() => resolve('dialogs remained open'), 250));
   assert.notEqual(await Promise.race([Promise.all([first, second]), timeout]), 'dialogs remained open');
   assert.equal(count, 1);
@@ -566,7 +598,7 @@ test('the picker adjusts when a question is dismissed between pages', async () =
     dialog++;
     if (dialog === 1) return choices.find(choice => choice.includes('次へ'));
     if (dialog === 2) {
-      s.handlers.get('message_start')!({ message: { role: 'user', content: [{ type: 'text', text: s.sent[0][0] }] } }, s.ctx);
+      s.acknowledge(0);
       return choices.find(choice => choice.includes('前へ'));
     }
     if (dialog === 3) return choices.find(choice => choice.startsWith('#5 '));
@@ -586,7 +618,7 @@ test('the picker refreshes when its selected question was dismissed concurrently
   s.ctx.ui.select = async (_title, choices) => {
     dialog++;
     if (dialog === 1) {
-      s.handlers.get('message_start')!({ message: { role: 'user', content: [{ type: 'text', text: s.sent[0][0] }] } }, s.ctx);
+      s.acknowledge(0);
       return choices.find(choice => choice.startsWith('#1 '));
     }
     if (dialog === 2) return choices.find(choice => choice.startsWith('#2 '));
@@ -609,7 +641,7 @@ test('the pending-question picker closes when its last question is dismissed', a
   const picker = s.command.handler('', s.ctx);
   await ready;
   await s.dismiss.handler('1', s.ctx);
-  s.handlers.get('message_start')!({ message: { role: 'user', content: [{ type: 'text', text: s.sent[0][0] }] } }, s.ctx);
+  s.acknowledge(0);
   const timeout = new Promise(resolve => setTimeout(() => resolve('picker remained open'), 250));
   assert.notEqual(await Promise.race([picker, timeout]), 'picker remained open');
   assert.equal(s.sent.length, 1);
