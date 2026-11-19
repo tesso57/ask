@@ -88,7 +88,6 @@ try:
  notice=c.until(lambda x:x.get('method')=='notify')
  assert 'ありません' in notice.get('message',''), notice
  c.close()
- # Start a fresh session and hold the model's follow-up request open.
  requests.clear(); hold_followup = True; session = tmp + '/streaming.jsonl'
  c=Client(); c.send({'id':'stream','type':'prompt','message':'hello'})
  assert followup_started.wait(10), 'model follow-up did not start'
@@ -103,13 +102,11 @@ try:
  c.until(lambda x:received_delivery(x, '回答: A'))
  c.until(lambda x:x.get('type')=='agent_settled'); c.close()
  assert any(message.get('role') == 'user' and '質問 #1' in json.dumps(message.get('content'), ensure_ascii=False) for req in requests for message in req.get('messages', [])), requests
- # The pending question must be displayed while an earlier, independent tool is still running.
  requests.clear(); hold_followup = False; parallel_case = True; session = tmp + '/parallel.jsonl'
  c=Client(); c.send({'id':'parallel','type':'prompt','message':'hello'})
  c.until(lambda x:x.get('method')=='setWidget' and '#1 Pick one' in str(x.get('widgetLines')))
  assert not any(x.get('type') == 'tool_execution_end' and x.get('toolName') == 'bash' for x in c.events), c.events
  c.until(lambda x:x.get('type')=='agent_settled'); c.close()
- # Dismissing informs the model that no answer or approval was given.
  requests.clear(); parallel_case = False; session = tmp + '/dismiss.jsonl'
  c=Client(); c.send({'id':'dismiss-init','type':'prompt','message':'hello'})
  c.until(lambda x:x.get('type')=='agent_settled')
@@ -121,21 +118,18 @@ try:
  notice=c.until(lambda x:x.get('method')=='notify')
  assert 'ありません' in notice.get('message',''), notice
  c.close()
- # Invalid options return a tool error without creating a pending question.
  requests.clear(); invalid_case = True; session = tmp + '/invalid.jsonl'
  c=Client(); c.send({'id':'invalid','type':'prompt','message':'hello'})
  c.until(lambda x:x.get('type')=='agent_settled')
  assert any(e.get('type') == 'tool_execution_end' and e.get('toolName') == 'ask_user' and e.get('isError') for e in c.events), c.events
  assert not any(e.get('method') == 'setWidget' and e.get('widgetLines') for e in c.events), c.events
  c.close()
- # Terminal controls in model-generated text are rejected before UI display.
  requests.clear(); invalid_case = False; unsafe_case = True; session = tmp + '/unsafe.jsonl'
  c=Client(); c.send({'id':'unsafe','type':'prompt','message':'hello'})
  c.until(lambda x:x.get('type')=='agent_settled')
  assert any(e.get('type') == 'tool_execution_end' and e.get('toolName') == 'ask_user' and e.get('isError') for e in c.events), c.events
  assert not any('\x1b' in (e.get('message') or '') or any('\x1b' in line for line in (e.get('widgetLines') or [])) for e in c.events if e.get('type') == 'extension_ui_request'), c.events
  c.close()
- # An answer dialog waiting in the old session must not block replacement or submit late.
  requests.clear(); unsafe_case = False; session = tmp + '/switch-dialog.jsonl'
  c=Client(); c.send({'id':'switch-init','type':'prompt','message':'hello'})
  c.until(lambda x:x.get('type')=='agent_settled')
@@ -148,7 +142,6 @@ try:
  c.until(lambda x:x.get('type')=='response' and x.get('id')=='state-after-switch' and x.get('success'))
  assert not any(message.get('role') == 'user' and '質問 #1' in json.dumps(message.get('content'), ensure_ascii=False) for req in requests for message in req.get('messages', [])), requests
  c.close()
- # A dismissal received while an answer dialog is open releases that dialog.
  for answer_cmd in ('/answer 1', '/answer'):
   requests.clear(); session = tmp + ('/dismiss-picker.jsonl' if answer_cmd == '/answer' else '/dismiss-open.jsonl')
   c=Client(); c.send({'id':'dismiss-open-init','type':'prompt','message':'hello'})
@@ -163,7 +156,6 @@ try:
   c.until(lambda x:x.get('type')=='response' and x.get('id')=='state-after-dismiss' and x.get('success'))
   assert not any(message.get('role') == 'user' and 'への回答:' in json.dumps(message.get('content'), ensure_ascii=False) for req in requests for message in req.get('messages', [])), requests
   c.close()
- # The question picker remains navigable when many questions are pending.
  requests.clear(); many_case = True; session = tmp + '/many.jsonl'
  c=Client(); c.send({'id':'many-init','type':'prompt','message':'hello'})
  c.until(lambda x:x.get('type')=='agent_settled')
@@ -179,7 +171,6 @@ try:
  c.until(lambda x:x.get('type')=='agent_settled')
  assert any(message.get('role') == 'user' and '#13' in json.dumps(message.get('content'), ensure_ascii=False) for req in requests for message in req.get('messages', [])), requests
  c.close()
- # A picker refreshed after a concurrent dismissal remains usable.
  requests.clear(); session = tmp + '/stale-picker.jsonl'
  c=Client(); c.send({'id':'stale-init','type':'prompt','message':'hello'})
  c.until(lambda x:x.get('type')=='agent_settled')
@@ -199,7 +190,6 @@ try:
  c.until(lambda x:x.get('type')=='agent_settled')
  assert any(message.get('role') == 'user' and '#2' in json.dumps(message.get('content'), ensure_ascii=False) and '回答' in json.dumps(message.get('content'), ensure_ascii=False) for req in requests for message in req.get('messages', [])), requests
  c.close()
- # Synchronous mode waits for a free-text answer and returns it as a tool result.
  requests.clear(); many_case = False; sync_case = True; session = tmp + '/sync.jsonl'
  c=Client(); c.send({'id':'sync-init','type':'prompt','message':'hello'})
  req=c.until(lambda x:x.get('method')=='select')

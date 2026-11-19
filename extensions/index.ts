@@ -64,7 +64,6 @@ export default function (pi: ExtensionAPI) {
         });
       });
       if (!ready) {
-        // Keep later dialogs behind the currently active one even though this caller has stopped waiting.
         void previous.then(release);
         return undefined;
       }
@@ -122,7 +121,6 @@ export default function (pi: ExtensionAPI) {
       }
       return answer;
     }
-    // Number choices so an option named like the free-text entry stays distinct.
     const choices = q.options.map((option, i) => `${i + 1}. ${option}`);
     const custom = `${choices.length + 1}. ${other}`;
     const selected = await ctx.ui.select(q.question, [...choices, custom], { signal });
@@ -205,7 +203,6 @@ export default function (pi: ExtensionAPI) {
           if (stillPending()) ctx.ui.notify(`質問 #${q.id} は回答待ちのままです`, "info");
           return;
         }
-        // A session switch or another answer may have removed the question while the dialog was open.
         if (!stillPending()) return;
         await deliver(q, `質問 #${q.id}「${q.question}」への回答: ${answer}`, ctx);
       } finally {
@@ -256,8 +253,6 @@ export default function (pi: ExtensionAPI) {
   }
 
   function discard(message: DeliveryMessage) {
-    // Pi emits and saves this same message object. Clear it before publication
-    // so a dispatch deferred by Pi cannot expose its payload on a sibling branch.
     message.display = false;
     message.content = [];
     delete message.details;
@@ -280,7 +275,6 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.on("context", ({ messages }) => {
-    // Aborting a run can leave its empty trigger in history.
     return { messages: messages.filter(message =>
       message.role !== "custom" || message.customType !== deliveryType || message.details !== undefined,
     ) };

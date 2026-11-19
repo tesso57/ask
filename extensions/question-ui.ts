@@ -4,7 +4,6 @@ import { unsafeControls } from "./text-safety.ts";
 
 type Question = { question: string; options: string[] };
 
-/** TUI-only picker: typing starts a free-text answer without leaving the options. */
 export async function showInlineQuestion(ctx: ExtensionContext, question: Question, signal?: AbortSignal): Promise<string | undefined> {
   if (signal?.aborted) return undefined;
   return ctx.ui.custom<string | undefined>((tui, theme, _keybindings, done) => {
