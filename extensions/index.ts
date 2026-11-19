@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext, MessageStartEvent } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { showInlineQuestion } from "./question-ui.ts";
@@ -8,7 +8,7 @@ type Question = { id: number; question: string; options: string[] };
 type DeliveryMessage = Extract<MessageStartEvent["message"], { role: "custom" }>;
 type StoredEntry =
   | { kind: "question"; question: Question }
-  | { kind: "attempt"; id: number; attemptId: string }
+  | { kind: "attempt"; id: number; attemptId: string; answerDigest?: string }
   | { kind: "delivery"; id: number; message: string };
 
 const entryType = "ask-user-state-v1";
@@ -172,12 +172,16 @@ export default function (pi: ExtensionAPI) {
     return q;
   }
 
-  async function deliver(q: Question, message: string, ctx: ExtensionCommandContext) {
+  async function deliver(q: Question, ctx: ExtensionCommandContext, answer?: string) {
     const signal = branchController.signal;
     if (!ctx.isIdle() && !ctx.signal) await ctx.waitForIdle();
     if (signal.aborted || pending.get(q.id) !== q) return;
     const attemptId = randomUUID();
-    pi.appendEntry(entryType, { kind: "attempt", id: q.id, attemptId } satisfies StoredEntry);
+    const message = answer === undefined
+      ? `ユーザーは質問 #${q.id}「${q.question}」を取り下げました。未回答であり、選択や承認を意味しません。`
+      : `質問 #${q.id}「${q.question}」への回答: ${answer}`;
+    const receipt = answer === undefined ? {} : { answerDigest: createHash("sha256").update(message).digest("hex") };
+    pi.appendEntry(entryType, { kind: "attempt", id: q.id, attemptId, ...receipt } satisfies StoredEntry);
     deliveries.set(attemptId, q);
     pi.sendMessage({ customType: deliveryType, content: message, display: true, details: attemptId }, {
       deliverAs: "steer", triggerTurn: true,
@@ -204,7 +208,7 @@ export default function (pi: ExtensionAPI) {
           return;
         }
         if (!stillPending()) return;
-        await deliver(q, `質問 #${q.id}「${q.question}」への回答: ${answer}`, ctx);
+        await deliver(q, ctx, answer);
       } finally {
         dialogs.delete(controller);
         if (!dialogs.size) answerDialogs.delete(q);
@@ -217,7 +221,7 @@ export default function (pi: ExtensionAPI) {
     handler: async (args, ctx) => {
       const q = findQuestion(args, ctx);
       if (!q) return;
-      await deliver(q, `ユーザーは質問 #${q.id}「${q.question}」を取り下げました。未回答であり、選択や承認を意味しません。`, ctx);
+      await deliver(q, ctx);
     },
   });
 

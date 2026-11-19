@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { createAskHarness as setup, type Dialog } from './helpers/ask-harness.ts';
 
 const question = { question: 'Choose?', options: ['A', 'B'] };
@@ -12,10 +13,24 @@ test('async returns immediately, and delivers a later free-text answer', async (
   s.selections.push('3. その他（自由入力）'); s.inputs.push('custom answer');
   await s.command.handler('1', s.ctx);
   assert.match(s.sent[0][0], /custom answer/);
+  const attempt = s.entries.at(-1);
+  assert.deepEqual(attempt, { type: "custom", customType: "ask-user-state-v1", data: {
+    kind: "attempt", id: 1, attemptId: s.deliveries[0].details,
+    answerDigest: createHash("sha256").update(s.deliveries[0].content).digest("hex"),
+  } });
   assert.equal(s.sent[0][1].deliverAs, 'steer');
   assert.match(s.widget![0], /#1/);
   s.acknowledge(0);
   assert.equal(s.widget, undefined);
+});
+
+test('dismissing a question does not record a user answer digest', async () => {
+  const s = setup();
+  await s.ask({ ...question, mode: 'async' });
+  await s.dismiss.handler('1', s.ctx);
+  assert.deepEqual(s.entries.at(-1), { type: "custom", customType: "ask-user-state-v1", data: {
+    kind: "attempt", id: 1, attemptId: s.deliveries[0].details,
+  } });
 });
 
 test('sync returns the selected answer or cancellation', async () => {
